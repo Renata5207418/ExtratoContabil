@@ -184,6 +184,25 @@ const DetalhesCliente = () => {
 
   const arquivos = data?.arquivos || [];
 
+    const numerosSolicitacoes = useMemo(() => {
+    const numerosBackend = data?.solicitacao?.numeros_solicitacoes || [];
+
+    if (numerosBackend.length > 0) {
+      return numerosBackend.filter(Boolean);
+    }
+
+    return [
+      ...new Set(
+        arquivos
+          .map((arq) => arq.numero_solicitacao)
+          .filter(Boolean)
+      )
+    ];
+  }, [data, arquivos]);
+
+  const totalSolicitacoes =
+    data?.solicitacao?.quantidade_solicitacoes ?? numerosSolicitacoes.length;
+
   const resumo = useMemo(() => {
     const total = arquivos.length;
     const conferir = arquivos.filter((arq) => arquivoPrecisaConferencia(arq)).length;
@@ -465,19 +484,14 @@ const DetalhesCliente = () => {
               <p className="text-xs text-gray-400 font-bold uppercase tracking-wider">
                 CNPJ: {data?.cliente?.cnpj} | Código: {data?.cliente?.codigo}
               </p>
-
-              {data?.solicitacao?.numero_solicitacao && (
-                <div className="flex items-center gap-1.5 px-3 py-1 bg-gray-50 border border-gray-200 rounded-md text-[9px] font-black text-gray-500 uppercase tracking-widest">
-                  <Hash size={10} className="text-gray-400" />
-                  Solicitação: #{data.solicitacao.numero_solicitacao}
-                </div>
-              )}
             </div>
 
             <div className="flex flex-wrap gap-2 mt-4">
-              <span className="px-3 py-1 rounded-full bg-gray-50 text-gray-500 border border-gray-100 text-[9px] font-black uppercase tracking-widest">
-                {resumo.total} arquivo(s)
-              </span>
+              {totalSolicitacoes > 0 && (
+                  <span className="px-3 py-1 rounded-full bg-gray-50 text-gray-500 border border-gray-100 text-[9px] font-black uppercase tracking-widest">
+                    {totalSolicitacoes} solicitação{totalSolicitacoes > 1 ? 'ões' : ''}
+                  </span>
+                )}
 
               <span className="px-3 py-1 rounded-full bg-green-50 text-green-600 border border-green-100 text-[9px] font-black uppercase tracking-widest">
                 {resumo.ok} OK
@@ -557,6 +571,9 @@ const DetalhesCliente = () => {
                 Arquivo
               </th>
               <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                Solicitação
+              </th>
+              <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">
                 Banco / Período
               </th>
               <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">
@@ -596,8 +613,17 @@ const DetalhesCliente = () => {
                     </div>
                   </td>
 
-                  <td className="px-6 py-4 text-xs font-medium text-gray-500">
-                    {`${banco} / ${periodo}`}
+                  <td className="px-6 py-4">
+                    {arq.numero_solicitacao ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gray-50 text-gray-500 border border-gray-100 text-[9px] font-black uppercase tracking-widest">
+                        <Hash size={10} />
+                        #{arq.numero_solicitacao}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold text-gray-300 uppercase">
+                        -
+                      </span>
+                    )}
                   </td>
 
                   <td className="px-6 py-4">
@@ -630,7 +656,7 @@ const DetalhesCliente = () => {
             {arquivosFiltrados.length === 0 && (
               <tr>
                 <td
-                  colSpan={4}
+                  colSpan={5}
                   className="px-6 py-10 text-center text-xs font-bold text-gray-400 uppercase tracking-widest"
                 >
                   Nenhum arquivo encontrado para este filtro.
@@ -652,9 +678,12 @@ const DetalhesCliente = () => {
                   </div>
 
                   <div className="min-w-0">
-                    <h3 className="font-bold text-[#3a3a3a] text-sm truncate max-w-[360px]">
-                      {String(selectedFile.arquivo)}
-                    </h3>
+                    {selectedFile?.numero_solicitacao && (
+                      <p className="mt-1 inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-gray-400">
+                        <Hash size={10} />
+                        Solicitação #{selectedFile.numero_solicitacao}
+                      </p>
+                    )}
 
                     <button
                       type="button"

@@ -113,26 +113,65 @@ def detalhe_cliente(codigo_dominio):
     mes_filtro = request.args.get('mes', datetime.now().strftime("%m.%Y"))
     
     cliente = clientes_col.find_one({"codigo_dominio": codigo_dominio})
+
     if not cliente:
         return jsonify({"erro": "Cliente não encontrado."}), 404
-        
-    solicitacao = solicitacoes_col.find_one({
+
+    solicitacoes = list(solicitacoes_col.find({
         "cliente_id": cliente["_id"],
         "mes_referencia": mes_filtro
-    })
-    
+    }))
+
     lista_arquivos = []
     info_solicitacao = None
-    
-    if solicitacao:
-        info_solicitacao = {
-            "id": str(solicitacao["_id"]),
-            "validado": solicitacao.get("validado", False),
-            "validado_por": solicitacao.get("validado_por"),
-            "data_validacao": solicitacao.get("data_validacao").strftime("%d/%m/%Y %H:%M") if solicitacao.get("data_validacao") else None
+
+    if solicitacoes:
+        solicitacoes_ids = [s["_id"] for s in solicitacoes]
+
+        solicitacao_por_id = {
+            str(s["_id"]): s
+            for s in solicitacoes
         }
 
-        arquivos = arquivos_col.find({"solicitacao_id": solicitacao["_id"]})
+        numeros_solicitacoes = []
+
+        for s in solicitacoes:
+            numero = s.get("numero_solicitacao")
+
+            if numero and numero not in numeros_solicitacoes:
+                numeros_solicitacoes.append(numero)
+
+        primeira_solicitacao = solicitacoes[0]
+
+        ultima_validacao = None
+
+        for s in solicitacoes:
+            if s.get("data_validacao"):
+                if not ultima_validacao or s.get("data_validacao") > ultima_validacao.get("data_validacao"):
+                    ultima_validacao = s
+
+        info_solicitacao = {
+            "id": str(primeira_solicitacao["_id"]),
+            "ids": [str(s["_id"]) for s in solicitacoes],
+            "quantidade_solicitacoes": len(solicitacoes),
+            "numeros_solicitacoes": numeros_solicitacoes,
+            "validado": all(s.get("validado", False) for s in solicitacoes),
+            "validado_por": ultima_validacao.get("validado_por") if ultima_validacao else None,
+            "data_validacao": ultima_validacao.get("data_validacao").strftime("%d/%m/%Y %H:%M") if ultima_validacao and ultima_validacao.get("data_validacao") else None
+        }
+
+        arquivos = list(arquivos_col.find({
+            "solicitacao_id": {
+                "$in": solicitacoes_ids
+            }
+        }))
+
+        arquivos.sort(
+            key=lambda arq: (
+                str(arq.get("numero_solicitacao") or ""),
+                str(arq.get("nome_arquivo") or "")
+            )
+        )
         
         for arq in arquivos:
             banco = arq.get("banco") or "Inexistente"
@@ -141,6 +180,13 @@ def detalhe_cliente(codigo_dominio):
             
             dt_leitura = arq.get("data_leitura")
             data_formatada = dt_leitura.strftime("%d/%m/%Y %H:%M") if dt_leitura else "-"
+
+            solicitacao_origem = solicitacao_por_id.get(str(arq.get("solicitacao_id")))
+
+            numero_solicitacao = arq.get("numero_solicitacao")
+
+            if not numero_solicitacao and solicitacao_origem:
+                numero_solicitacao = solicitacao_origem.get("numero_solicitacao")
             
             lista_arquivos.append({
                 "id": str(arq["_id"]),
@@ -149,7 +195,10 @@ def detalhe_cliente(codigo_dominio):
                 "banco_periodo": banco_periodo,
                 "data": data_formatada,
                 "resumo_detalhado": arq.get("conteudo", "Resumo indisponível"),
-                "numero_solicitacao": arq.get("numero_solicitacao"),
+
+                "solicitacao_id": str(arq.get("solicitacao_id")) if arq.get("solicitacao_id") else None,
+                "numero_solicitacao": numero_solicitacao,
+
                 "observacao": arq.get("observacao", ""),
 
                 "status": arq.get("status", ""),
@@ -596,6 +645,9 @@ def dados_dashboard():
         "mes_referencia": mes_filtro
     }))
 
+    # Card de solicitações
+    total_solicitacoes = len(sols_mes)
+
     # Agrupa as solicitações por cliente
     solicitacoes_por_cliente = {}
 
@@ -609,7 +661,6 @@ def dados_dashboard():
 
     empresas_com_envio = []
     empresas_sem_envio = []
-    total_pdfs = 0
 
     for emp in empresas_dominio:
         codigo = emp["codigo_dominio"]
@@ -636,10 +687,10 @@ def dados_dashboard():
 
         if qtd_recebidos > 0:
             empresas_com_envio.append(dados_empresa)
-            total_pdfs += qtd_recebidos
         else:
             empresas_sem_envio.append(dados_empresa)
 
+    # Gráfico continua mostrando quantidade de arquivos/PDFs por mês
     grafico = []
 
     for i in range(4, -1, -1):
@@ -657,7 +708,7 @@ def dados_dashboard():
             "solicitacao_id": {
                 "$in": sols_ids
             }
-        })
+        }) if sols_ids else 0
 
         grafico.append({
             "name": mes_nome,
@@ -677,7 +728,7 @@ def dados_dashboard():
     return jsonify({
         "estatisticas": {
             "carteira": total_carteira,
-            "processamento": total_pdfs,
+            "processamento": total_solicitacoes,
             "engajamento": len(empresas_com_envio),
             "engajamento_pct": engajamento_pct,
             "pendente": len(empresas_sem_envio),
@@ -713,7 +764,6 @@ def toggle_validar(solicitacao_id):
     solicitacoes_col.update_one({"_id": ObjectId(solicitacao_id)}, {"$set": update_data})
     
     return jsonify({"mensagem": "Status alterado!", "validado": novo_status}), 200
-
 
 
 # ==========================================
@@ -761,12 +811,12 @@ def exportar_dashboard_excel():
             if cliente_mongo_id:
                 solicitacoes_ids = solicitacoes_por_cliente.get(cliente_mongo_id, [])
 
-            if solicitacoes_ids:
-                qtd_recebidos = arquivos_col.count_documents({
-                    "solicitacao_id": {
-                        "$in": solicitacoes_ids
-                    }
-                })
+                if solicitacoes_ids:
+                    qtd_recebidos = arquivos_col.count_documents({
+                        "solicitacao_id": {
+                            "$in": solicitacoes_ids
+                        }
+                    })
 
             dados_empresa = {
                 "codigo_dominio": codigo,

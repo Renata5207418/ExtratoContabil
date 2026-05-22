@@ -341,7 +341,7 @@ const Dashboard = () => {
         <StatCard 
           label="Processamento" 
           value={estatisticas.processamento} 
-          subtext={`PDFs lidos em ${mesFiltro.split('-')[1]}/${mesFiltro.split('-')[0]}`} 
+          subtext={`Solicitações em ${mesFiltro.split('-')[1]}/${mesFiltro.split('-')[0]}`} 
           icon={FileCheck} 
           theme="blue"
         />
