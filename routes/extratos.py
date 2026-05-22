@@ -34,6 +34,21 @@ def formatar_historico_edicoes(historico):
     return historico_formatado
 
 
+def formatar_cnpj(cnpj):
+    somente_numeros = ''.join(filter(str.isdigit, str(cnpj or "")))
+
+    if len(somente_numeros) == 14:
+        return (
+            f"{somente_numeros[:2]}."
+            f"{somente_numeros[2:5]}."
+            f"{somente_numeros[5:8]}/"
+            f"{somente_numeros[8:12]}-"
+            f"{somente_numeros[12:]}"
+        )
+
+    return str(cnpj or "")
+
+
 # ==========================================
 # 1. TELA DE ACOMPANHAMENTO 
 # ==========================================
@@ -177,20 +192,6 @@ def exportar_relatorio_solicitacao(solicitacao_id):
         mes_referencia = solicitacao.get("mes_referencia", "")
 
         arquivos = list(arquivos_col.find({"solicitacao_id": ObjectId(solicitacao_id)}))
-
-        def formatar_cnpj(cnpj):
-            somente_numeros = ''.join(filter(str.isdigit, str(cnpj or "")))
-
-            if len(somente_numeros) == 14:
-                return (
-                    f"{somente_numeros[:2]}."
-                    f"{somente_numeros[2:5]}."
-                    f"{somente_numeros[5:8]}/"
-                    f"{somente_numeros[8:12]}-"
-                    f"{somente_numeros[12:]}"
-                )
-
-            return str(cnpj or "N/A")
 
         # Cria planilha
         wb = Workbook()
@@ -571,6 +572,7 @@ def validar_lote(solicitacao_id):
         
     return jsonify({"mensagem": "Lote validado com sucesso!", "validado_por": username}), 200
 
+
 # ==========================================
 # 6. DADOS DO DASHBOARD
 # ==========================================
@@ -583,11 +585,27 @@ def dados_dashboard():
     empresas_dominio = get_todas_empresas_dominio()
     total_carteira = len(empresas_dominio)
 
-    sols_mes = list(solicitacoes_col.find({"mes_referencia": mes_filtro}))
-    sols_map = {str(s["cliente_id"]): s for s in sols_mes}
-
     clientes_mongo = list(clientes_col.find({}))
-    cliente_id_por_codigo = {c["codigo_dominio"]: str(c["_id"]) for c in clientes_mongo}
+    cliente_id_por_codigo = {
+        c["codigo_dominio"]: str(c["_id"])
+        for c in clientes_mongo
+    }
+
+    # Busca TODAS as solicitações do mês
+    sols_mes = list(solicitacoes_col.find({
+        "mes_referencia": mes_filtro
+    }))
+
+    # Agrupa as solicitações por cliente
+    solicitacoes_por_cliente = {}
+
+    for sol in sols_mes:
+        cliente_id_str = str(sol["cliente_id"])
+
+        if cliente_id_str not in solicitacoes_por_cliente:
+            solicitacoes_por_cliente[cliente_id_str] = []
+
+        solicitacoes_por_cliente[cliente_id_str].append(sol["_id"])
 
     empresas_com_envio = []
     empresas_sem_envio = []
@@ -598,9 +616,16 @@ def dados_dashboard():
         cliente_mongo_id = cliente_id_por_codigo.get(codigo)
 
         qtd_recebidos = 0
-        if cliente_mongo_id and cliente_mongo_id in sols_map:
-            solicitacao = sols_map[cliente_mongo_id]
-            qtd_recebidos = arquivos_col.count_documents({"solicitacao_id": solicitacao["_id"]})
+
+        if cliente_mongo_id:
+            solicitacoes_ids = solicitacoes_por_cliente.get(cliente_mongo_id, [])
+
+            if solicitacoes_ids:
+                qtd_recebidos = arquivos_col.count_documents({
+                    "solicitacao_id": {
+                        "$in": solicitacoes_ids
+                    }
+                })
 
         dados_empresa = {
             "Código Domínio": codigo,
@@ -616,18 +641,38 @@ def dados_dashboard():
             empresas_sem_envio.append(dados_empresa)
 
     grafico = []
+
     for i in range(4, -1, -1):
-        mes_grafico = (datetime.now() - relativedelta(months=i+1))
+        mes_grafico = datetime.now() - relativedelta(months=i + 1)
         mes_str = mes_grafico.strftime("%m.%Y")
         mes_nome = mes_grafico.strftime("%b").capitalize()
 
-        sols_periodo = list(solicitacoes_col.find({"mes_referencia": mes_str}))
-        sols_ids = [s["_id"] for s in sols_periodo]
-        qtd_mes = arquivos_col.count_documents({"solicitacao_id": {"$in": sols_ids}})
-        grafico.append({"name": mes_nome, "envios": qtd_mes})
+        sols_periodo = list(solicitacoes_col.find({
+            "mes_referencia": mes_str
+        }))
 
-    engajamento_pct = round((len(empresas_com_envio) / total_carteira * 100), 1) if total_carteira > 0 else 0
-    pendente_pct = round((len(empresas_sem_envio) / total_carteira * 100), 1) if total_carteira > 0 else 0
+        sols_ids = [s["_id"] for s in sols_periodo]
+
+        qtd_mes = arquivos_col.count_documents({
+            "solicitacao_id": {
+                "$in": sols_ids
+            }
+        })
+
+        grafico.append({
+            "name": mes_nome,
+            "envios": qtd_mes
+        })
+
+    engajamento_pct = round(
+        (len(empresas_com_envio) / total_carteira * 100),
+        1
+    ) if total_carteira > 0 else 0
+
+    pendente_pct = round(
+        (len(empresas_sem_envio) / total_carteira * 100),
+        1
+    ) if total_carteira > 0 else 0
 
     return jsonify({
         "estatisticas": {
@@ -669,3 +714,219 @@ def toggle_validar(solicitacao_id):
     
     return jsonify({"mensagem": "Status alterado!", "validado": novo_status}), 200
 
+
+
+# ==========================================
+# 6.1. EXPORTAR LISTA DO DASHBOARD EM XLSX
+# ==========================================
+@extratos_bp.route('/dashboard/exportar', methods=['GET'])
+@jwt_required()
+def exportar_dashboard_excel():
+    try:
+        mes_padrao = (datetime.now() - relativedelta(months=1)).strftime("%m.%Y")
+        mes_filtro = request.args.get('mes', mes_padrao)
+        tipo = request.args.get('tipo', 'geral')
+
+        empresas_dominio = get_todas_empresas_dominio()
+
+        sols_mes = list(solicitacoes_col.find({
+             "mes_referencia": mes_filtro
+        }))
+
+        solicitacoes_por_cliente = {}
+
+        for sol in sols_mes:
+            cliente_id_str = str(sol["cliente_id"])
+
+            if cliente_id_str not in solicitacoes_por_cliente:
+                solicitacoes_por_cliente[cliente_id_str] = []
+
+            solicitacoes_por_cliente[cliente_id_str].append(sol["_id"])
+
+        clientes_mongo = list(clientes_col.find({}))
+        cliente_id_por_codigo = {
+            c["codigo_dominio"]: str(c["_id"])
+            for c in clientes_mongo
+        }
+
+        empresas_com_envio = []
+        empresas_sem_envio = []
+
+        for emp in empresas_dominio:
+            codigo = emp["codigo_dominio"]
+            cliente_mongo_id = cliente_id_por_codigo.get(codigo)
+
+            qtd_recebidos = 0
+
+            if cliente_mongo_id:
+                solicitacoes_ids = solicitacoes_por_cliente.get(cliente_mongo_id, [])
+
+            if solicitacoes_ids:
+                qtd_recebidos = arquivos_col.count_documents({
+                    "solicitacao_id": {
+                        "$in": solicitacoes_ids
+                    }
+                })
+
+            dados_empresa = {
+                "codigo_dominio": codigo,
+                "razao_social": emp.get("nome_empresa", ""),
+                "cnpj": formatar_cnpj(emp.get("cnpj", "")),
+                "arquivos_processados": qtd_recebidos
+            }
+
+            if qtd_recebidos > 0:
+                empresas_com_envio.append(dados_empresa)
+            else:
+                empresas_sem_envio.append(dados_empresa)
+
+        # ==========================
+        # ESTILOS PADRÃO
+        # ==========================
+        cinza_claro = "E7E6E6"
+        cinza_titulo = "D9D9D9"
+        cinza_borda = "BFBFBF"
+
+        fonte_titulo = Font(bold=True, size=14, color="000000")
+        fonte_header = Font(bold=True, color="000000")
+        fonte_normal = Font(size=10, color="000000")
+
+        fill_titulo = PatternFill("solid", fgColor=cinza_titulo)
+        fill_header = PatternFill("solid", fgColor=cinza_claro)
+
+        borda_fina = Border(
+            left=Side(style="thin", color=cinza_borda),
+            right=Side(style="thin", color=cinza_borda),
+            top=Side(style="thin", color=cinza_borda),
+            bottom=Side(style="thin", color=cinza_borda),
+        )
+
+        alinhamento_centro = Alignment(horizontal="center", vertical="center")
+        alinhamento_esquerda = Alignment(horizontal="left", vertical="center")
+        alinhamento_numero = Alignment(horizontal="center", vertical="center")
+
+        def preencher_aba(ws, titulo, dados):
+            ws.title = titulo[:31]
+
+            ws.merge_cells("A1:D1")
+            ws["A1"] = titulo.upper()
+            ws["A1"].font = fonte_titulo
+            ws["A1"].fill = fill_titulo
+            ws["A1"].alignment = alinhamento_centro
+            ws["A1"].border = borda_fina
+            ws.row_dimensions[1].height = 26
+
+            ws.merge_cells("A2:D2")
+            ws["A2"] = f"Competência: {mes_filtro}"
+            ws["A2"].font = Font(bold=True, size=11, color="000000")
+            ws["A2"].alignment = alinhamento_centro
+            ws["A2"].border = borda_fina
+
+            linha_header = 4
+            headers = [
+                "CÓDIGO DOMÍNIO",
+                "RAZÃO SOCIAL",
+                "CNPJ",
+                "ARQUIVOS PROCESSADOS"
+            ]
+
+            for col_idx, header in enumerate(headers, start=1):
+                cell = ws.cell(row=linha_header, column=col_idx)
+                cell.value = header
+                cell.font = fonte_header
+                cell.fill = fill_header
+                cell.border = borda_fina
+                cell.alignment = alinhamento_centro
+
+            linha_atual = linha_header + 1
+
+            for item in dados:
+                valores = [
+                    item.get("codigo_dominio", ""),
+                    item.get("razao_social", ""),
+                    item.get("cnpj", ""),
+                    item.get("arquivos_processados", 0),
+                ]
+
+                for col_idx, valor in enumerate(valores, start=1):
+                    cell = ws.cell(row=linha_atual, column=col_idx)
+                    cell.value = valor
+                    cell.font = fonte_normal
+                    cell.border = borda_fina
+
+                    if col_idx in [1, 4]:
+                        cell.alignment = alinhamento_numero
+                    else:
+                        cell.alignment = alinhamento_esquerda
+
+                    if col_idx == 3:
+                        cell.number_format = "@"
+
+                linha_atual += 1
+
+            if not dados:
+                ws.merge_cells(
+                    start_row=linha_atual,
+                    start_column=1,
+                    end_row=linha_atual,
+                    end_column=4
+                )
+                cell = ws.cell(row=linha_atual, column=1)
+                cell.value = "Nenhuma empresa encontrada para este filtro."
+                cell.font = fonte_normal
+                cell.border = borda_fina
+                cell.alignment = alinhamento_centro
+
+            ws.column_dimensions["A"].width = 18
+            ws.column_dimensions["B"].width = 55
+            ws.column_dimensions["C"].width = 22
+            ws.column_dimensions["D"].width = 28
+
+            for row in range(linha_header + 1, linha_atual + 1):
+                ws.row_dimensions[row].height = 22
+
+            ultima_linha = max(linha_atual - 1, linha_header)
+            ws.auto_filter.ref = f"A{linha_header}:D{ultima_linha}"
+            ws.freeze_panes = "A5"
+            ws.sheet_view.showGridLines = False
+
+        # ==========================
+        # CRIA PLANILHA
+        # ==========================
+        wb = Workbook()
+
+        if tipo == "geral":
+            ws_com = wb.active
+            preencher_aba(ws_com, "Com Envio", empresas_com_envio)
+
+            ws_sem = wb.create_sheet("Sem Envio")
+            preencher_aba(ws_sem, "Sem Envio", empresas_sem_envio)
+
+            filename = f"Dashboard_Extratos_Geral_{mes_filtro}.xlsx"
+
+        elif tipo == "sem_envio":
+            ws = wb.active
+            preencher_aba(ws, "Sem Envio", empresas_sem_envio)
+
+            filename = f"Dashboard_Extratos_Sem_Envio_{mes_filtro}.xlsx"
+
+        else:
+            ws = wb.active
+            preencher_aba(ws, "Com Envio", empresas_com_envio)
+
+            filename = f"Dashboard_Extratos_Com_Envio_{mes_filtro}.xlsx"
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+    

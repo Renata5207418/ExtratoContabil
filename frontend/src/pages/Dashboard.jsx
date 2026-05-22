@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
-import * as XLSX from 'xlsx';
+import api from '../services/api';
+import { toast } from 'sonner';
 import { 
   Users, 
   FileCheck, 
@@ -57,6 +58,7 @@ const StatCard = ({ label, value, subtext, icon: Icon, trend, onClick, clickable
 const Dashboard = () => {
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [exportando, setExportando] = useState(false);
   
   const [mesFiltro, setMesFiltro] = useState(() => {
     const data = new Date();
@@ -71,27 +73,54 @@ const Dashboard = () => {
   const [modalConfig, setModalConfig] = useState({ isOpen: false, type: null }); 
   const [searchTerm, setSearchTerm] = useState('');
 
+  const getMesParaApi = () => {
+    const [ano, mes] = mesFiltro.split('-');
+    return `${mes}.${ano}`;
+  };
+
+  const baixarArquivoBlob = (blobData, filename, mimeType) => {
+    const blob = new Blob([blobData], {
+      type: mimeType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+
+    const url = window.URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', filename);
+
+    document.body.appendChild(link);
+    link.click();
+
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const obterNomeArquivo = (response, fallbackName) => {
+    const contentDisposition = response.headers?.['content-disposition'];
+
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="?([^"]+)"?/);
+
+      if (match?.[1]) {
+        return match[1];
+      }
+    }
+
+    return fallbackName;
+  };
+
   useEffect(() => {
     const fetchDashboard = async () => {
       setLoading(true); 
       try {
-        const token = localStorage.getItem('token'); 
-        
-        const [ano, mes] = mesFiltro.split('-');
-        const mesParaApi = `${mes}.${ano}`;
+        const mesParaApi = getMesParaApi();
 
-        const response = await fetch(`http://localhost:5000/api/extratos/dashboard?mes=${mesParaApi}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          setDashboardData(data);
-        }
+        const response = await api.get(`/extratos/dashboard?mes=${mesParaApi}`);
+        setDashboardData(response.data);
       } catch (error) {
         console.error("Erro ao buscar dados do dashboard", error);
+        toast.error("Erro ao buscar dados do dashboard");
       } finally {
         setLoading(false);
       }
@@ -100,43 +129,104 @@ const Dashboard = () => {
     fetchDashboard();
   }, [mesFiltro]); 
 
-  const exportarExcelGeral = () => {
-    if (!dashboardData) return;
-    const { com_envio, sem_envio } = dashboardData.listas_excel;
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(com_envio), "Com Envio no Mês");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sem_envio), "Pendente (Sem Envio)");
-    XLSX.writeFile(wb, `Relatorio_Geral_Extratos_${mesFiltro}.xlsx`);
+  const exportarListaDashboard = async (tipo) => {
+    const mesParaApi = getMesParaApi();
+
+    const response = await api.get(
+      `/extratos/dashboard/exportar?mes=${mesParaApi}&tipo=${tipo}`,
+      {
+        responseType: 'blob'
+      }
+    );
+
+    const fallbackName = tipo === 'sem_envio'
+      ? `Dashboard_Extratos_Sem_Envio_${mesParaApi}.xlsx`
+      : `Dashboard_Extratos_Com_Envio_${mesParaApi}.xlsx`;
+
+    const filename = obterNomeArquivo(response, fallbackName);
+
+    baixarArquivoBlob(
+      response.data,
+      filename,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
   };
 
-  const exportarExcelModal = () => {
-    const dataToExport = getModalData();
-    if (dataToExport.length === 0) return;
-    
-    const ws = XLSX.utils.json_to_sheet(dataToExport);
-    const wb = XLSX.utils.book_new();
-    const sheetName = modalConfig.type === 'com_envio' ? 'Empresas com Envio' : 'Empresas Pendentes';
-    
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
-    XLSX.writeFile(wb, `${sheetName.replace(/ /g, '_')}_${mesFiltro}.xlsx`);
-  };
+  const exportarExcelGeral = async () => {
+  if (!dashboardData || exportando) return;
 
-  const openModal = (type) => {
+  try {
+    setExportando(true);
+
+    const mesParaApi = getMesParaApi();
+
+    const response = await api.get(
+      `/extratos/dashboard/exportar?mes=${mesParaApi}&tipo=geral`,
+      {
+        responseType: 'blob'
+      }
+    );
+
+    const filename = obterNomeArquivo(
+      response,
+      `Dashboard_Extratos_Geral_${mesParaApi}.xlsx`
+    );
+
+    baixarArquivoBlob(
+      response.data,
+      filename,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+
+    toast.success("Base completa exportada com sucesso!");
+  } catch (error) {
+    console.error("Erro ao exportar base completa:", error);
+    toast.error("Erro ao exportar base completa");
+  } finally {
+    setExportando(false);
+  }
+};
+
+   const openModal = (type) => {
     setSearchTerm('');
     setModalConfig({ isOpen: true, type });
   };
+
+  const exportarExcelModal = async () => {
+    if (!modalConfig.type || exportando) return;
+
+    try {
+      setExportando(true);
+
+      await exportarListaDashboard(modalConfig.type);
+
+      toast.success("Lista exportada com sucesso!");
+    } catch (error) {
+      console.error("Erro ao exportar lista:", error);
+      toast.error("Erro ao exportar lista");
+    } finally {
+      setExportando(false);
+    }
+  };
+
   const closeModal = () => setModalConfig({ isOpen: false, type: null });
 
   const getModalData = () => {
     if (!dashboardData || !modalConfig.type) return [];
-    const list = dashboardData.listas_excel[modalConfig.type];
+
+    const list = dashboardData.listas_excel?.[modalConfig.type] || [];
     
     if (!searchTerm) return list;
     
-    return list.filter(emp => 
-      emp["Razão Social"].toLowerCase().includes(searchTerm.toLowerCase()) ||
-      String(emp["Código Domínio"]).includes(searchTerm)
-    );
+    return list.filter(emp => {
+      const razao = String(emp["Razão Social"] || "").toLowerCase();
+      const codigo = String(emp["Código Domínio"] || "");
+
+      return (
+        razao.includes(searchTerm.toLowerCase()) ||
+        codigo.includes(searchTerm)
+      );
+    });
   };
 
   if (loading) {
@@ -223,10 +313,20 @@ const Dashboard = () => {
 
         <button 
           onClick={exportarExcelGeral}
-          className="flex items-center gap-2 bg-[#3a3a3a] text-white px-5 py-3 rounded-xl text-[10px] font-black uppercase tracking-[0.15em] hover:bg-[#252525] transition-all shadow-xl shadow-gray-200 active:scale-95"
+          disabled={exportando}
+          className="flex items-center gap-2 bg-[#3a3a3a] text-white px-5 py-3 rounded-xl text-[10px] font-black uppercase tracking-[0.15em] hover:bg-[#252525] transition-all shadow-xl shadow-gray-200 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          <Download size={16} />
-          Exportar Base Completa
+          {exportando ? (
+            <>
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+              Exportando...
+            </>
+          ) : (
+            <>
+              <Download size={16} />
+              Exportar Base Completa
+            </>
+          )}
         </button>
       </div>
 
@@ -265,8 +365,8 @@ const Dashboard = () => {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white p-8 rounded-[32px] shadow-sm border border-white">
+      <div className="grid grid-cols-1 gap-6">
+       <div className="bg-white p-8 rounded-[32px] shadow-sm border border-white">
           <div className="flex justify-between items-center mb-8">
             <h3 className="text-sm font-black text-[#3a3a3a] uppercase tracking-widest">Fluxo de Envios</h3>
             <div className="h-1 w-10 bg-[#fdb913] rounded-full"></div>
@@ -289,26 +389,7 @@ const Dashboard = () => {
               </AreaChart>
             </ResponsiveContainer>
           </div>
-        </div>
-
-        <div className="bg-[#3a3a3a] p-8 rounded-[32px] shadow-sm text-white flex flex-col justify-between">
-          <div>
-            <h3 className="text-sm font-black uppercase tracking-widest mb-2">Resumo Operacional</h3>
-            <p className="text-xs text-gray-400 font-medium leading-relaxed">
-              O processamento está operando com alta precisão na extração de dados bancários baseando-se na carteira Domínio.
-            </p>
-          </div>
-          <div className="space-y-4 mt-8">
-             <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
-                <p className="text-[10px] font-bold text-gray-500 uppercase mb-1">Média de tempo por PDF</p>
-                <p className="text-xl font-bold">1.2 segundos</p>
-             </div>
-             <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
-                <p className="text-[10px] font-bold text-gray-500 uppercase mb-1">Empresas Processadas</p>
-                <p className="text-xl font-bold">{estatisticas.engajamento}</p>
-             </div>
-          </div>
-        </div>
+        </div>        
       </div>
 
       <div className="mt-6 bg-white p-8 rounded-[32px] shadow-sm border border-white">
@@ -395,8 +476,9 @@ const Dashboard = () => {
                     <tr>
                       <th className="pb-4 text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 w-24">Código</th>
                       <th className="pb-4 text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100">Razão Social</th>
+                      <th className="pb-4 text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100">CNPJ</th>
                       <th className="pb-4 text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 text-right">
-                        {modalConfig.type === 'com_envio' ? 'Arquivos Lidos' : 'Status'}
+                        {modalConfig.type === 'com_envio' ? 'Arquivos' : 'Status'}
                       </th>
                     </tr>
                   </thead>
@@ -406,6 +488,7 @@ const Dashboard = () => {
                         <tr key={emp["Código Domínio"]} className="hover:bg-gray-50 transition-colors group">
                           <td className="py-4 border-b border-gray-50 text-sm font-bold text-gray-500">#{emp["Código Domínio"]}</td>
                           <td className="py-4 border-b border-gray-50 text-sm font-bold text-[#3a3a3a] truncate max-w-md">{emp["Razão Social"]}</td>
+                          <td className="py-4 border-b border-gray-50 text-sm font-medium text-gray-500">{emp["CNPJ"]}</td>
                           <td className="py-4 border-b border-gray-50 text-right">
                             {modalConfig.type === 'com_envio' ? (
                               <span className="inline-flex items-center justify-center px-3 py-1 rounded-full bg-green-50 text-green-600 text-xs font-bold border border-green-100">
@@ -421,7 +504,7 @@ const Dashboard = () => {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan="3" className="py-10 text-center text-gray-400 text-sm font-medium">
+                        <td colSpan="4" className="py-10 text-center text-gray-400 text-sm font-medium">
                           Nenhuma empresa encontrada com os filtros atuais.
                         </td>
                       </tr>
@@ -444,10 +527,11 @@ const Dashboard = () => {
                 </button>
                 <button 
                   onClick={exportarExcelModal}
-                  className="flex items-center gap-2 bg-[#474745] text-[#faf9f7] px-6 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-[#6e6d6a] transition-all shadow-md shadow-yellow-500/20 active:scale-95"
+                  disabled={exportando}
+                  className="flex items-center gap-2 bg-[#474745] text-[#faf9f7] px-6 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-[#6e6d6a] transition-all shadow-md shadow-yellow-500/20 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   <Download size={16} />
-                  Baixar Lista (.XLSX)
+                  {exportando ? 'Baixando...' : 'Baixar Lista (.XLSX)'}
                 </button>
               </div>
             </div>
