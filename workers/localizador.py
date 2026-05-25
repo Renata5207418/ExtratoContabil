@@ -27,10 +27,13 @@ def obter_mes_apuracao(data_base=None):
     return ultimo_dia_mes_anterior.strftime("%m.%Y")
 
 
+EXTENSOES_EXTRATO = {".pdf", ".ofx", ".ofc", ".qfx"}
+
+
 def listar_arquivos_extrato(pasta_extrato: Path):
     """
-    Lista arquivos de extrato aceitando .pdf, .PDF, .Pdf etc.
-    No Linux, glob('*.pdf') não encontra .PDF maiúsculo.
+    Lista arquivos de extrato aceitando PDF, OFX, OFC e QFX.
+    No Linux, glob('*.pdf') não encontra .PDF maiúsculo, por isso usamos suffix.lower().
     """
     arquivos = []
 
@@ -38,7 +41,7 @@ def listar_arquivos_extrato(pasta_extrato: Path):
         if not arquivo.is_file():
             continue
 
-        if arquivo.suffix.lower() != ".pdf":
+        if arquivo.suffix.lower() not in EXTENSOES_EXTRATO:
             continue
 
         arquivos.append(arquivo)
@@ -192,6 +195,7 @@ def varrer_rede_extratos():
                     "cliente_id": cliente_id,
                     "numero_solicitacao": numero_solicitacao,
                     "nome_arquivo": arquivo_pdf.name,
+                    "extensao": arquivo_pdf.suffix.lower(),
                     "caminho_completo": caminho_str,
                     "status": "pendente",
                     "data_leitura": datetime.fromtimestamp(arquivo_pdf.stat().st_mtime),

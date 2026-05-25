@@ -132,6 +132,10 @@ def detalhe_cliente(codigo_dominio):
             str(s["_id"]): s
             for s in solicitacoes
         }
+        numero_por_solicitacao = {
+            str(s["_id"]): s.get("numero_solicitacao", "")
+            for s in solicitacoes
+        }
 
         numeros_solicitacoes = []
 
@@ -168,7 +172,10 @@ def detalhe_cliente(codigo_dominio):
 
         arquivos.sort(
             key=lambda arq: (
-                str(arq.get("numero_solicitacao") or ""),
+                str(
+                    arq.get("numero_solicitacao")
+                    or numero_por_solicitacao.get(str(arq.get("solicitacao_id")), "")
+                ),
                 str(arq.get("nome_arquivo") or "")
             )
         )
@@ -240,7 +247,34 @@ def exportar_relatorio_solicitacao(solicitacao_id):
         cnpj_empresa = cliente.get("cnpj", "N/A") if cliente else "N/A"
         mes_referencia = solicitacao.get("mes_referencia", "")
 
-        arquivos = list(arquivos_col.find({"solicitacao_id": ObjectId(solicitacao_id)}))
+        # Busca todas as solicitações do mesmo cliente e competência
+        solicitacoes_mes = list(solicitacoes_col.find({
+            "cliente_id": solicitacao["cliente_id"],
+            "mes_referencia": mes_referencia
+        }))
+
+        solicitacoes_ids = [s["_id"] for s in solicitacoes_mes]
+
+        numero_por_solicitacao = {
+            str(s["_id"]): s.get("numero_solicitacao", "")
+            for s in solicitacoes_mes
+        }
+
+        arquivos = list(arquivos_col.find({
+            "solicitacao_id": {
+                "$in": solicitacoes_ids
+            }
+        }))
+
+        arquivos.sort(
+            key=lambda arq: (
+                str(
+                    arq.get("numero_solicitacao")
+                    or numero_por_solicitacao.get(str(arq.get("solicitacao_id")), "")
+                ),
+                str(arq.get("nome_arquivo") or "")
+            )
+        )
 
         # Cria planilha
         wb = Workbook()
@@ -274,7 +308,7 @@ def exportar_relatorio_solicitacao(solicitacao_id):
         alinhamento_quebra = Alignment(horizontal="left", vertical="top", wrap_text=True)
 
         # Título principal
-        ws.merge_cells("A1:D1")
+        ws.merge_cells("A1:E1")
         ws["A1"] = "RELATÓRIO DE EXTRATOS"
         ws["A1"].font = fonte_titulo
         ws["A1"].fill = fill_titulo
@@ -306,13 +340,13 @@ def exportar_relatorio_solicitacao(solicitacao_id):
             ws[f"B{linha}"].number_format = "@"
 
             # Mescla B até D para ficar mais bonito
-            ws.merge_cells(start_row=linha, start_column=2, end_row=linha, end_column=4)
+            ws.merge_cells(start_row=linha, start_column=2, end_row=linha, end_column=5)
 
             linha += 1
 
         # Cabeçalho da tabela
         linha_header = 8
-        headers = ["NOME DO EXTRATO", "BANCO", "PERÍODO", "OBSERVAÇÃO"]
+        headers = ["SOLICITAÇÃO", "NOME DO EXTRATO", "BANCO", "PERÍODO", "OBSERVAÇÃO"]
 
         for col_idx, header in enumerate(headers, start=1):
             cell = ws.cell(row=linha_header, column=col_idx)
@@ -326,7 +360,14 @@ def exportar_relatorio_solicitacao(solicitacao_id):
         linha_atual = linha_header + 1
 
         for arq in arquivos:
+            solicitacao_id_arq = str(arq.get("solicitacao_id"))
+            numero_solicitacao = (
+                arq.get("numero_solicitacao")
+                or numero_por_solicitacao.get(solicitacao_id_arq, "")
+            )
+
             dados_linha = [
+                numero_solicitacao,
                 arq.get("nome_arquivo", ""),
                 arq.get("banco", "Desconhecido"),
                 arq.get("periodo", "N/A"),
@@ -345,17 +386,18 @@ def exportar_relatorio_solicitacao(solicitacao_id):
 
         # Caso não tenha arquivos
         if not arquivos:
-            ws.cell(row=linha_atual, column=1).value = "Nenhum arquivo encontrado para esta solicitação."
+            ws.cell(row=linha_atual, column=1).value = "Nenhum arquivo encontrado para este cliente nesta competência." 
             ws.cell(row=linha_atual, column=1).font = fonte_normal
             ws.cell(row=linha_atual, column=1).alignment = alinhamento_esquerda
-            ws.merge_cells(start_row=linha_atual, start_column=1, end_row=linha_atual, end_column=4)
+            ws.merge_cells(start_row=linha_atual, start_column=1, end_row=linha_atual, end_column=5)
 
         # Larguras das colunas
         larguras = {
-            "A": 55,
-            "B": 24,
-            "C": 16,
-            "D": 45,
+            "A": 16,
+            "B": 55,
+            "C": 24,
+            "D": 16,
+            "E": 45,
         }
 
         for col, largura in larguras.items():
@@ -370,7 +412,7 @@ def exportar_relatorio_solicitacao(solicitacao_id):
 
         # Filtro na tabela
         ultima_linha = max(linha_atual - 1, linha_header)
-        ws.auto_filter.ref = f"A{linha_header}:D{ultima_linha}"
+        ws.auto_filter.ref = f"A{linha_header}:E{ultima_linha}"
 
         # Ajuste visual geral
         ws.sheet_view.showGridLines = False

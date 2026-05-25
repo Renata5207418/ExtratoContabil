@@ -18,64 +18,140 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-const RenderResumoIA = ({ conteudo }) => {
-  if (!conteudo) {
-    return <span className="text-gray-400">Resumo indisponível</span>;
-  }
-
-  let dados;
+const parseResumoDetalhado = (conteudo) => {
+  if (!conteudo) return null;
 
   try {
-    dados = typeof conteudo === 'string' ? JSON.parse(conteudo) : conteudo;
+    return typeof conteudo === 'string' ? JSON.parse(conteudo) : conteudo;
   } catch (e) {
-    return <span className="whitespace-pre-wrap">{conteudo}</span>;
+    return null;
   }
+};
 
-  if (dados.sem_movimento === true) {
+const simNao = (valor) => {
+  if (valor === true) return 'Sim';
+  if (valor === false) return 'Não';
+  return 'Não identificado';
+};
+
+const formatarModoLeitura = (modo) => {
+  const mapa = {
+    pdf_metadados: 'PDF - Metadados',
+    pdf_texto: 'PDF - Texto extraído',
+    pdf_ocr: 'PDF - OCR',
+    pdf_erro: 'PDF - Erro',
+    pdf_sem_pymupdf: 'PDF - Sem PyMuPDF',
+    ofx_estruturado: 'OFX - Estruturado',
+    ofxparse: 'OFX - Estruturado',
+    ofx_manual: 'OFX - Manual',
+    ofx_erro: 'OFX - Erro',
+    extensao_nao_suportada: 'Extensão não suportada'
+  };
+
+  return mapa[modo] || formatadorSeguro(modo);
+};
+
+const InfoLeitura = ({ label, value }) => (
+  <div className="bg-white/5 border border-white/5 rounded-xl p-3 text-xs">
+    <p className="text-[#fdb913] font-black uppercase tracking-widest text-[9px] mb-1">
+      {label}
+    </p>
+
+    <p className="text-white/90 break-words font-bold">
+      {formatadorSeguro(value)}
+    </p>
+  </div>
+);
+
+const RenderResumoIA = ({ conteudo, selectedFile }) => {
+  const dados = parseResumoDetalhado(conteudo);
+
+  if (!dados) {
     return (
       <div className="bg-white/5 border border-white/5 rounded-2xl p-5 text-center">
-        <CheckCircle2 size={24} className="text-gray-400 mx-auto mb-2" />
+        <AlertTriangle size={22} className="text-gray-400 mx-auto mb-2" />
+
         <p className="text-gray-300 text-[11px] font-black uppercase tracking-widest">
-          Sem movimentação registrada
+          Resumo indisponível
+        </p>
+
+        <p className="text-gray-400 text-[10px] font-medium mt-2">
+          Abra o PDF original para conferência manual.
         </p>
       </div>
     );
   }
 
-  if (
-    dados.sem_movimento === false &&
-    Array.isArray(dados.movimentacoes_flat) &&
-    dados.movimentacoes_flat.length === 0
-  ) {
+  const modoLeitura = dados.modo_leitura || dados.origem_extracao || 'pdf_metadados';
+  const metadadosExtraidos = dados.metadados_extraidos === true;
+  const semMovimento = dados.sem_movimento === true;
+  const qtdMovimentacoes = Number(dados.qtd_movimentacoes || 0);
+
+  const { banco, periodo } = separarBancoPeriodo(selectedFile?.banco_periodo);
+  const tipo = selectedFile?.tipo || selectedFile?.tipo_documento || 'N/A';
+
+  if (semMovimento) {
     return (
-      <div className="bg-white/5 border border-dashed border-[#fdb913]/30 rounded-2xl p-5 text-center">
-        <AlertTriangle size={22} className="text-[#fdb913] mx-auto mb-2" />
-        <p className="text-gray-200 text-[11px] font-black uppercase tracking-widest">
-          Leitura parcial
-        </p>
-        <p className="text-gray-400 text-[10px] font-medium mt-2">
-          Banco e período podem ter sido identificados, mas as transações não foram extraídas automaticamente.
-        </p>
+      <div className="space-y-4">
+        <div className="bg-white/5 border border-green-400/20 rounded-2xl p-5 text-center">
+          <CheckCircle2 size={24} className="text-green-400 mx-auto mb-2" />
+
+          <p className="text-gray-200 text-[11px] font-black uppercase tracking-widest">
+            Sem movimento identificado
+          </p>
+
+          <p className="text-gray-400 text-[10px] font-medium mt-2">
+            O sistema identificou ausência de movimentação. A conferência final continua sendo visual pelo PDF original.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <InfoLeitura label="Banco" value={banco} />
+          <InfoLeitura label="Período" value={periodo} />
+          <InfoLeitura label="Tipo" value={tipo} />
+          <InfoLeitura label="Modo" value={formatarModoLeitura(modoLeitura)} />
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-2">
-      {Object.entries(dados).slice(0, 12).map(([key, value]) => (
-        <div
-          key={key}
-          className="bg-white/5 border border-white/5 rounded-xl p-3 text-xs"
-        >
-          <p className="text-[#fdb913] font-black uppercase tracking-widest text-[9px] mb-1">
-            {key.replace(/_/g, ' ')}
-          </p>
+    <div className="space-y-4">
+      <div
+        className={`border rounded-2xl p-5 text-center ${
+          metadadosExtraidos
+            ? 'bg-white/5 border-green-400/20'
+            : 'bg-white/5 border-dashed border-[#fdb913]/30'
+        }`}
+      >
+        {metadadosExtraidos ? (
+          <CheckCircle2 size={24} className="text-green-400 mx-auto mb-2" />
+        ) : (
+          <AlertTriangle size={22} className="text-[#fdb913] mx-auto mb-2" />
+        )}
 
-          <p className="text-white/90 break-words">
-            {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-          </p>
-        </div>
-      ))}
+        <p className="text-gray-200 text-[11px] font-black uppercase tracking-widest">
+          {metadadosExtraidos ? 'Leitura automática concluída' : 'Conferência necessária'}
+        </p>
+
+        <p className="text-gray-400 text-[10px] font-medium mt-2">
+          {metadadosExtraidos
+            ? 'Banco, período e tipo foram identificados. Confira o conteúdo diretamente no PDF original.'
+            : 'Banco ou período não foram identificados com segurança. Preencha manualmente antes de validar.'}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <InfoLeitura label="Banco" value={banco} />
+        <InfoLeitura label="Período" value={periodo} />
+        <InfoLeitura label="Tipo" value={tipo} />
+        <InfoLeitura label="Modo" value={formatarModoLeitura(modoLeitura)} />
+        <InfoLeitura label="Sem movimento" value={simNao(dados.sem_movimento)} />
+        <InfoLeitura
+          label="Movimentos OFX"
+          value={qtdMovimentacoes > 0 ? qtdMovimentacoes : 'N/A'}
+        />
+      </div>
     </div>
   );
 };
@@ -119,6 +195,7 @@ const arquivoPrecisaConferencia = (arq) => {
 
 const SituacaoBadge = ({ arq }) => {
   const precisaConferir = arquivoPrecisaConferencia(arq);
+  const dados = parseResumoDetalhado(arq?.resumo_detalhado);
 
   if (precisaConferir) {
     return (
@@ -129,10 +206,32 @@ const SituacaoBadge = ({ arq }) => {
     );
   }
 
+  if (dados?.sem_movimento === true) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border bg-blue-50 text-blue-600 border-blue-100 text-[9px] font-black uppercase tracking-widest">
+        <CheckCircle2 size={11} />
+        Sem movimento
+      </span>
+    );
+  }
+
+  if (
+    dados?.modo_leitura === 'ofx_estruturado' ||
+    dados?.origem_extracao === 'ofxparse' ||
+    dados?.origem_extracao === 'ofx_manual'
+  ) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border bg-green-50 text-green-600 border-green-100 text-[9px] font-black uppercase tracking-widest">
+        <CheckCircle2 size={11} />
+        OFX lido
+      </span>
+    );
+  }
+
   return (
     <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border bg-green-50 text-green-600 border-green-100 text-[9px] font-black uppercase tracking-widest">
       <CheckCircle2 size={11} />
-      OK
+      Identificado
     </span>
   );
 };
@@ -494,7 +593,7 @@ const DetalhesCliente = () => {
                 )}
 
               <span className="px-3 py-1 rounded-full bg-green-50 text-green-600 border border-green-100 text-[9px] font-black uppercase tracking-widest">
-                {resumo.ok} OK
+                {resumo.ok} identificados
               </span>
 
               {resumo.conferir > 0 && (
@@ -627,18 +726,23 @@ const DetalhesCliente = () => {
                   </td>
 
                   <td className="px-6 py-4">
+                    <div className="flex flex-col gap-1">
+                      <p className="text-xs font-bold text-[#3a3a3a]">
+                        {banco}
+                      </p>
+
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                        {periodo}
+                      </p>
+                    </div>
+                  </td>
+
+                  <td className="px-6 py-4">
                     <SituacaoBadge arq={arq} />
                   </td>
 
                   <td className="px-6 py-4">
-                    <div className="flex items-center justify-end gap-2">
-                      <button
-                        onClick={() => abrirPdfOriginal(arq.id)}
-                        className="p-2 bg-gray-50 text-gray-400 rounded-lg hover:bg-[#fdb913] hover:text-white transition-all"
-                        title="Abrir PDF original"
-                      >
-                        <ExternalLink size={16} />
-                      </button>
+                    <div className="flex items-center justify-end gap-2">                     
 
                       <button
                         onClick={() => abrirModalArquivo(arq)}
@@ -647,6 +751,15 @@ const DetalhesCliente = () => {
                       >
                         <Eye size={16} />
                       </button>
+
+                       <button
+                        onClick={() => abrirPdfOriginal(arq.id)}
+                        className="p-2 bg-gray-50 text-gray-400 rounded-lg hover:bg-[#fdb913] hover:text-white transition-all"
+                        title="Abrir PDF original"
+                      >
+                        <ExternalLink size={16} />
+                      </button>
+                      
                     </div>
                   </td>
                 </tr>
@@ -738,6 +851,9 @@ const DetalhesCliente = () => {
                       <option value="Sicredi" />
                       <option value="Nubank" />
                       <option value="C6 Bank" />
+                      <option value="XP Investimentos" />
+                      <option value="Omie.CASH" />
+                      <option value="Transpocred" />
                       <option value="PagSeguro" />
                       <option value="Stone" />
                       <option value="Desconhecido" />
@@ -772,7 +888,7 @@ const DetalhesCliente = () => {
 
                   <textarea
                     className="w-full min-h-[110px] bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 text-xs text-[#3a3a3a] font-medium focus:outline-none focus:ring-2 focus:ring-[#fdb913]/40 focus:border-[#fdb913] resize-y"
-                    placeholder="Ex: Cliente enviou extrato detalhado de vendas..."
+                    placeholder="Ex: Cliente enviou extrato sem movimentação / verificar manualmente no PDF..."
                     value={editObs}
                     onChange={(e) => setEditObs(e.target.value)}
                   />
@@ -785,7 +901,7 @@ const DetalhesCliente = () => {
                     className="w-full flex items-center justify-between gap-3 bg-gray-50 px-4 py-3 text-left"
                   >
                     <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
-                      Análise da leitura
+                      Leitura automática
                     </p>
 
                     <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
@@ -795,7 +911,10 @@ const DetalhesCliente = () => {
 
                   {showAnalysis && (
                     <div className="p-4 bg-[#3a3a3a]">
-                      <RenderResumoIA conteudo={selectedFile.resumo_detalhado} />
+                      <RenderResumoIA
+                        conteudo={selectedFile.resumo_detalhado}
+                        selectedFile={selectedFile}
+                      />
                     </div>
                   )}
                 </div>
