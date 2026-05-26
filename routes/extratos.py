@@ -1,5 +1,6 @@
 import io
 import os
+import mimetypes
 from datetime import datetime
 from flask import Blueprint, request, jsonify, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -592,7 +593,7 @@ def atualizar_arquivo(arquivo_id, campo):
 
 
 # ==========================================
-# 4.2. VISUALIZAR PDF ORIGINAL
+# 4.2. VISUALIZAR / BAIXAR ARQUIVO ORIGINAL
 # ==========================================
 @extratos_bp.route('/arquivo/<arquivo_id>/visualizar', methods=['GET'])
 @jwt_required()
@@ -607,7 +608,7 @@ def visualizar_arquivo_original(arquivo_id):
             return jsonify({"erro": "Arquivo não encontrado."}), 404
 
         caminho = arquivo.get("caminho_completo")
-        nome_arquivo = arquivo.get("nome_arquivo", "arquivo.pdf")
+        nome_arquivo = arquivo.get("nome_arquivo", "arquivo")
 
         if not caminho:
             return jsonify({"erro": "Caminho do arquivo não encontrado no banco."}), 404
@@ -620,13 +621,23 @@ def visualizar_arquivo_original(arquivo_id):
                 "arquivo": nome_arquivo
             }), 404
 
-        if not caminho_absoluto.lower().endswith(".pdf"):
-            return jsonify({"erro": "O arquivo não é um PDF válido."}), 400
+        extensao = os.path.splitext(nome_arquivo)[1].lower()
+
+        mimetype, _ = mimetypes.guess_type(caminho_absoluto)
+
+        if extensao == ".pdf":
+            return send_file(
+                caminho_absoluto,
+                mimetype=mimetype or "application/pdf",
+                as_attachment=False,
+                download_name=nome_arquivo,
+                conditional=True
+            )
 
         return send_file(
             caminho_absoluto,
-            mimetype="application/pdf",
-            as_attachment=False,
+            mimetype=mimetype or "application/octet-stream",
+            as_attachment=True,
             download_name=nome_arquivo,
             conditional=True
         )

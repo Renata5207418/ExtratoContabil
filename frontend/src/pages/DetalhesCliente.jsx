@@ -456,7 +456,7 @@ const DetalhesCliente = () => {
     }
   };
 
-  const abrirPdfOriginal = (arquivoId) => {
+  const abrirArquivoOriginal = (arquivoId) => {
     const token = localStorage.getItem('token');
 
     if (!token) {
@@ -753,9 +753,9 @@ const DetalhesCliente = () => {
                       </button>
 
                        <button
-                        onClick={() => abrirPdfOriginal(arq.id)}
+                        onClick={() => abrirArquivoOriginal(arq.id)}
                         className="p-2 bg-gray-50 text-gray-400 rounded-lg hover:bg-[#fdb913] hover:text-white transition-all"
-                        title="Abrir PDF original"
+                        title="Abrir/Baixar arquivo original"
                       >
                         <ExternalLink size={16} />
                       </button>
@@ -800,11 +800,11 @@ const DetalhesCliente = () => {
 
                     <button
                       type="button"
-                      onClick={() => abrirPdfOriginal(selectedFile.id)}
+                      onClick={() => abrirArquivoOriginal(selectedFile.id)}
                       className="mt-2 inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-[#fdb913] hover:text-[#3a3a3a]"
                     >
                       <ExternalLink size={12} />
-                      Ver PDF original
+                      Abrir arquivo original
                     </button>
 
                     {selectedFile?.ultima_edicao_por && selectedFile?.ultima_edicao_em && (
